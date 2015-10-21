@@ -292,6 +292,24 @@ void stdouterr_sent(struct handle *h, int new_backlog)
     }
 }
 
+void load_console_defaults(Conf *conf)
+{
+    HANDLE h;
+    CONSOLE_SCREEN_BUFFER_INFO csbi;
+    int rows, cols;
+    h = GetStdHandle(STD_OUTPUT_HANDLE);
+    if (GetConsoleScreenBufferInfo(h, &csbi))
+    {
+        /* size of visible area in Windows' console window */
+        rows = csbi.srWindow.Bottom - csbi.srWindow.Top + 1;
+        cols = csbi.srWindow.Right - csbi.srWindow.Left + 1;
+        conf_set_int(conf, CONF_height, rows);
+        conf_set_int(conf, CONF_width, cols);
+        /* Uncomment line below to set backscroll buffer height too */
+        /* conf_set_int(conf, CONF_savelines, csbi.dwSize.Y); */
+    }
+}
+
 const int share_can_be_downstream = TRUE;
 const int share_can_be_upstream = TRUE;
 
@@ -323,6 +341,7 @@ int main(int argc, char **argv)
      */
     conf = conf_new();
     do_defaults(NULL, conf);
+    load_console_defaults(conf);
     loaded_session = FALSE;
     default_protocol = conf_get_int(conf, CONF_protocol);
     default_port = conf_get_int(conf, CONF_port);
