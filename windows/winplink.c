@@ -11,6 +11,7 @@
 #include "putty.h"
 #include "storage.h"
 #include "tree234.h"
+#include "wininput.h"
 
 #define WM_AGENT_CALLBACK (WM_APP + 4)
 
@@ -84,6 +85,7 @@ void cmdline_error(const char *p, ...)
 }
 
 HANDLE inhandle, outhandle, errhandle;
+BOOL inhandle_real;
 struct handle *stdin_handle, *stdout_handle, *stderr_handle;
 DWORD orig_console_mode;
 int connopen;
@@ -262,6 +264,104 @@ int stdin_gotdata(struct handle *h, void *data, int len)
     if (connopen && back->connected(backhandle)) {
 	if (len > 0) {
 	    return back->send(backhandle, data, len);
+	} else {
+	    back->special(backhandle, TS_EOF);
+	    return 0;
+	}
+    } else
+	return 0;
+}
+
+int stdin_real_gotdata(struct handle *h, void *records, int len)
+{
+    if (len < 0) {
+	/*
+	 * Special case: report read error.
+	 */
+	char buf[4096];
+	FormatMessage(FORMAT_MESSAGE_FROM_SYSTEM, NULL, -len, 0,
+		      buf, lenof(buf), NULL);
+	buf[lenof(buf)-1] = '\0';
+	if (buf[strlen(buf)-1] == '\n')
+	    buf[strlen(buf)-1] = '\0';
+	fprintf(stderr, "Unable to read from standard input: %s\n", buf);
+	cleanup_exit(0);
+    }
+    noise_ultralight(len);
+    if (connopen && back->connected(backhandle)) {
+	if (len > 0) {
+		int isentall = 0, isent, i;
+		unsigned char buf[20];
+		int translated;
+		INPUT_RECORD* r;
+		BYTE keystate[256];
+		DWORD dw;
+		UINT message;
+		WPARAM wParam = 0;
+		LPARAM lParam = 0;
+	    //return back->send(backhandle, data, len);
+
+		r = (INPUT_RECORD*)records;
+		memset(keystate, 0, sizeof(keystate));
+		for (i = 0; i < len; i++, r++)
+		{
+			switch (r->EventType)
+			{
+			case KEY_EVENT:
+				dw = r->Event.KeyEvent.dwControlKeyState;
+				keystate[VK_CAPITAL] = (dw & CAPSLOCK_ON) ? 1 : 0;
+				keystate[VK_NUMLOCK] = (dw & NUMLOCK_ON) ? 1 : 0;
+				keystate[VK_SCROLL] = (dw & SCROLLLOCK_ON) ? 1 : 0;
+				keystate[VK_MENU] = (dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? 1 : 0;
+				keystate[VK_LMENU] = (dw & LEFT_ALT_PRESSED) ? 1 : 0;
+				keystate[VK_RMENU] = (dw & RIGHT_ALT_PRESSED) ? 1 : 0;
+				keystate[VK_CONTROL] = (dw & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) ? 1 : 0;
+				keystate[VK_LCONTROL] = (dw & LEFT_CTRL_PRESSED) ? 1 : 0;
+				keystate[VK_RCONTROL] = (dw & RIGHT_CTRL_PRESSED) ? 1 : 0;
+				keystate[VK_SHIFT] = (dw & (SHIFT_PRESSED)) ? 1 : 0;
+				keystate[VK_LSHIFT] = (dw & SHIFT_PRESSED) ? 1 : 0;
+				keystate[VK_RSHIFT] = 0;
+
+				message = (r->Event.KeyEvent.bKeyDown)
+					? ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYDOWN : WM_KEYDOWN)
+					: ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYUP : WM_KEYUP);
+				wParam = r->Event.KeyEvent.wVirtualKeyCode;
+				lParam = ((r->Event.KeyEvent.bKeyDown) ? 0 : (KF_UP << 16))
+					| ((dw & ENHANCED_KEY) ? (KF_EXTENDED << 16) : 0)
+					;
+
+				translated = TranslateWinKey(message, wParam, lParam,
+					conf, keystate, 0, NULL/*ldisc*/, buf);
+				switch (translated)
+				{
+				case twk_ASCIIZ:
+					translated = strlen(buf);
+					break;
+				case twk_FORWARD:
+					//TODO: Unicode?
+					if (!r->Event.KeyEvent.uChar.AsciiChar || !r->Event.KeyEvent.bKeyDown)
+						continue;
+					buf[0] = r->Event.KeyEvent.uChar.AsciiChar;
+					translated = 1;
+					break;
+				default:
+					if (translated <= 0)
+						continue;
+				}
+				if (translated > 0)
+				{
+					isent = back->send(backhandle, buf, translated);
+					isentall += isent;
+				}
+				break;
+			case WINDOW_BUFFER_SIZE_EVENT:
+				break;
+			default:
+				// Skip unsupported events
+				continue;
+			}
+		}
+		return isentall;
 	} else {
 	    back->special(backhandle, TS_EOF);
 	    return 0;
@@ -667,7 +767,7 @@ int main(int argc, char **argv)
      * call fails, because we know we aren't necessarily running in
      * a console.
      */
-    GetConsoleMode(inhandle, &orig_console_mode);
+    inhandle_real = GetConsoleMode(inhandle, &orig_console_mode);
     SetConsoleMode(inhandle, ENABLE_PROCESSED_INPUT);
 
     /*
@@ -691,7 +791,7 @@ int main(int argc, char **argv)
 	DWORD ticks;
 
 	if (!sending && back->sendok(backhandle)) {
-	    stdin_handle = handle_input_new(inhandle, stdin_gotdata, NULL,
+		stdin_handle = handle_input_new(inhandle, inhandle_real ? stdin_real_gotdata : stdin_gotdata, NULL,
 					    0);
 	    sending = TRUE;
 	}

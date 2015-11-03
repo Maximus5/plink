@@ -15,9 +15,11 @@ enum TranslateWinKeySpecials
 	twk_REQPASTE = -8,
 	twk_SYSMENU = -9,
 	twk_FULLSCREEN = -10,
+	twk_CTRLBREAK = -11,
 };
 
 extern int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
+			Conf *conf, BYTE* keystate/*[256]*/, int compose_state, void *ldisc,
 			unsigned char *output);
 
 #endif

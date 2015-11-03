@@ -96,7 +96,10 @@ struct handle_input {
      * Data set by the input thread before signalling ev_to_main,
      * and read by the main thread after receiving that signal.
      */
+	union {
     char buffer[4096];		       /* the data read from the handle */
+	INPUT_RECORD records[4096/sizeof(INPUT_RECORD)];
+	};
     DWORD len;			       /* how much data that was */
     int readerr;		       /* lets us know about read errors */
 
@@ -195,6 +198,74 @@ static DWORD WINAPI handle_input_threadfunc(void *param)
 
     if (povl)
 	CloseHandle(oev);
+
+    return 0;
+}
+
+/*
+ * The actual thread procedure for an input thread.
+ */
+static DWORD WINAPI handle_input_real_threadfunc(void *param)
+{
+    struct handle_input *ctx = (struct handle_input *) param;
+    int readret, readlen, finished;
+
+    //if (ctx->flags & HANDLE_FLAG_UNITBUFFER)
+	readlen = 1;
+    //else
+	//readlen = sizeof(ctx->records)/sizeof(ctx->records[0]);
+
+    while (1) {
+	readret = ReadConsoleInput(ctx->h, ctx->records,readlen, &ctx->len);
+	if (!readret)
+	    ctx->readerr = GetLastError();
+	else
+	    ctx->readerr = 0;
+
+	if (!readret) {
+	    /*
+	     * Windows apparently sends ERROR_BROKEN_PIPE when a
+	     * pipe we're reading from is closed normally from the
+	     * writing end. This is ludicrous; if that situation
+	     * isn't a natural EOF, _nothing_ is. So if we get that
+	     * particular error, we pretend it's EOF.
+	     */
+	    if (ctx->readerr == ERROR_BROKEN_PIPE)
+		ctx->readerr = 0;
+	    ctx->len = 0;
+	}
+
+	if (readret && ctx->len == 0 &&
+	    (ctx->flags & HANDLE_FLAG_IGNOREEOF))
+	    continue;
+
+        /*
+         * If we just set ctx->len to 0, that means the read operation
+         * has returned end-of-file. Telling that to the main thread
+         * will cause it to set its 'defunct' flag and dispose of the
+         * handle structure at the next opportunity, in which case we
+         * mustn't touch ctx at all after the SetEvent. (Hence we do
+         * even _this_ check before the SetEvent.)
+         */
+        finished = (ctx->len == 0);
+
+	SetEvent(ctx->ev_to_main);
+
+	if (finished)
+	    break;
+
+	WaitForSingleObject(ctx->ev_from_main, INFINITE);
+	if (ctx->done) {
+            /*
+             * The main thread has asked us to shut down. Send back an
+             * event indicating that we've done so. Hereafter we must
+             * not touch ctx at all, because the main thread might
+             * have freed it.
+             */
+            SetEvent(ctx->ev_to_main);
+            break;
+        }
+    }
 
     return 0;
 }
@@ -437,6 +508,9 @@ struct handle *handle_input_new(HANDLE handle, handle_inputfn_t gotdata,
 {
     struct handle *h = snew(struct handle);
     DWORD in_threadid; /* required for Win9x */
+	BOOL real_console; DWORD real_mode;
+
+	real_console = GetConsoleMode(handle, &real_mode);
 
     h->type = HT_INPUT;
     h->u.i.h = handle;
@@ -453,7 +527,8 @@ struct handle *handle_input_new(HANDLE handle, handle_inputfn_t gotdata,
 	handles_by_evtomain = newtree234(handle_cmp_evtomain);
     add234(handles_by_evtomain, h);
 
-    CreateThread(NULL, 0, handle_input_threadfunc,
+    CreateThread(NULL, 0,
+		 real_console ? handle_input_real_threadfunc : handle_input_threadfunc,
 		 &h->u.i, 0, &in_threadid);
     h->u.i.busy = TRUE;
 

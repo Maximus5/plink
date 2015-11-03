@@ -1,15 +1,45 @@
 
-#include <stdio.h>
-#include <stdlib.h>
-#include <ctype.h>
-#include <time.h>
-#include <limits.h>
 #include <assert.h>
 
 #include "putty.h"
 #include "terminal.h"
-#include "storage.h"
 #include "wininput.h"
+
+int format_arrow_key2(char *buf, int vt52_mode, int app_cursor_keys, int no_applic_c, int xkey, int ctrl)
+{
+    char *p = buf;
+
+    if (vt52_mode)
+	p += sprintf((char *) p, "\x1B%c", xkey);
+    else {
+	int app_flg = (app_cursor_keys && !no_applic_c);
+#if 0
+	/*
+	 * RDB: VT100 & VT102 manuals both state the app cursor
+	 * keys only work if the app keypad is on.
+	 *
+	 * SGT: That may well be true, but xterm disagrees and so
+	 * does at least one application, so I've #if'ed this out
+	 * and the behaviour is back to PuTTY's original: app
+	 * cursor and app keypad are independently switchable
+	 * modes. If anyone complains about _this_ I'll have to
+	 * put in a configurable option.
+	 */
+	if (!app_keypad_keys)
+	    app_flg = 0;
+#endif
+	/* Useful mapping of Ctrl-arrows */
+	if (ctrl)
+	    app_flg = !app_flg;
+
+	if (app_flg)
+	    p += sprintf((char *) p, "\x1BO%c", xkey);
+	else
+	    p += sprintf((char *) p, "\x1B[%c", xkey);
+    }
+
+    return p - buf;
+}
 
 /*
  * Translate a WM_(SYS)?KEY(UP|DOWN) message into a string of ASCII
@@ -18,24 +48,32 @@
  * to indicate a NUL-terminated "special" string.
  */
 int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
+			Conf *conf, BYTE* keystate/*[256]*/, int compose_state, void *ldisc,
 			unsigned char *output)
 {
-    BYTE keystate[256];
+    //BYTE keystate[256];
     int scan, left_alt = 0, key_down, shift_state;
-    int r, i, code;
+    //int r, i;
+    int code;
     unsigned char *p = output;
     static int alt_sum = 0;
     int funky_type = conf_get_int(conf, CONF_funky_type);
     int no_applic_k = conf_get_int(conf, CONF_no_applic_k);
     int ctrlaltkeys = conf_get_int(conf, CONF_ctrlaltkeys);
     int nethack_keypad = conf_get_int(conf, CONF_nethack_keypad);
+	int app_cursor_keys = conf_get_int(conf, CONF_app_cursor);
+	int no_applic_c = conf_get_int(conf, CONF_no_applic_c);
+	int app_keypad_keys = (keystate[VK_NUMLOCK] & 1); //conf_get_int(conf, CONF_app_keypad);
+	int vt52_mode = FALSE;
+	int cr_lf_return = FALSE;
 
-    HKL kbd_layout = GetKeyboardLayout(0);
+    //HKL kbd_layout = GetKeyboardLayout(0);
 
     static wchar_t keys_unicode[3];
     static int compose_char = 0;
-    static WPARAM compose_keycode = 0;
+    //static WPARAM compose_keycode = 0;
 
+#if 0
     r = GetKeyboardState(keystate);
     if (!r)
 	memset(keystate, 0, sizeof(keystate));
@@ -122,7 +160,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 
 	/* Nastyness with NUMLock - Shift-NUMLock is left alone though */
 	if ((funky_type == FUNKY_VT400 ||
-	     (funky_type <= FUNKY_LINUX && term->app_keypad_keys &&
+	     (funky_type <= FUNKY_LINUX && app_keypad_keys &&
 	      !no_applic_k))
 	    && wParam == VK_NUMLOCK && !(keystate[VK_SHIFT] & 0x80)) {
 
@@ -136,11 +174,14 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	/* And write back the 'adjusted' state */
 	SetKeyboardState(keystate);
     }
+#endif
 
+#if 0
     /* Disable Auto repeat if required */
-    if (term->repeat_off &&
+    if (repeat_off &&
 	(HIWORD(lParam) & (KF_UP | KF_REPEAT)) == KF_REPEAT)
 	return twk_SKIP;
+#endif
 
     if ((HIWORD(lParam) & KF_ALTDOWN) && (keystate[VK_RMENU] & 0x80) == 0)
 	left_alt = 1;
@@ -161,6 +202,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
     shift_state = ((keystate[VK_SHIFT] & 0x80) != 0)
 	+ ((keystate[VK_CONTROL] & 0x80) != 0) * 2;
 
+#if 0
     /* Note if AltGr was pressed and if it was used as a compose key */
     if (!compose_state) {
 	compose_keycode = 0x100;
@@ -185,9 +227,10 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 
     if (compose_state > 1 && left_alt)
 	compose_state = 0;
+#endif
 
     /* Sanitize the number pad if not using a PC NumPad */
-    if (left_alt || (term->app_keypad_keys && !no_applic_k
+    if (left_alt || (app_keypad_keys && !no_applic_k
 		     && funky_type != FUNKY_XTERM)
 	|| funky_type == FUNKY_VT400 || nethack_keypad || compose_state) {
 	if ((HIWORD(lParam) & KF_EXTENDED) == 0) {
@@ -284,7 +327,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	}
 	/* Control-Numlock for app-keypad mode switch */
 	if (wParam == VK_PAUSE && shift_state == 2) {
-	    term->app_keypad_keys ^= 1;
+	    app_keypad_keys ^= 1;
 	    return twk_SKIP;
 	}
 
@@ -327,7 +370,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 
 	    if (funky_type == FUNKY_VT400 ||
 		(funky_type <= FUNKY_LINUX &&
-		 term->app_keypad_keys && !no_applic_k)) switch (wParam) {
+		 app_keypad_keys && !no_applic_k)) switch (wParam) {
 		  case VK_EXECUTE:
 		    xkey = 'P';
 		    break;
@@ -341,7 +384,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 		    xkey = 'S';
 		    break;
 		}
-	    if (term->app_keypad_keys && !no_applic_k)
+	    if (app_keypad_keys && !no_applic_k)
 		switch (wParam) {
 		  case VK_NUMPAD0:
 		    xkey = 'p';
@@ -408,7 +451,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 		    break;
 		}
 	    if (xkey) {
-		if (term->vt52_mode) {
+		if (vt52_mode) {
 		    if (xkey >= 'P' && xkey <= 'S')
 			p += sprintf((char *) p, "\x1B%c", xkey);
 		    else
@@ -445,9 +488,9 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    return p - output;
 	}
 	if (wParam == VK_CANCEL && shift_state == 2) {	/* Ctrl-Break */
-	    if (back)
-		back->special(backhandle, TS_BRK);
-	    return twk_SKIP;
+	    //if (back)
+		//back->special(backhandle, TS_BRK);
+	    return twk_CTRLBREAK;
 	}
 	if (wParam == VK_PAUSE) {      /* Break/Pause */
 	    *p++ = 26;
@@ -471,7 +514,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    *p++ = 0x1E;	       /* Ctrl-~ == Ctrl-^ in xterm at least */
 	    return p - output;
 	}
-	if (shift_state == 0 && wParam == VK_RETURN && term->cr_lf_return) {
+	if (shift_state == 0 && wParam == VK_RETURN && cr_lf_return) {
 	    *p++ = '\r';
 	    *p++ = '\n';
 	    return p - output;
@@ -573,7 +616,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	if (funky_type == FUNKY_VT400 && code <= 6)
 	    code = "\0\2\1\4\5\3\6"[code];
 
-	if (term->vt52_mode && code > 0 && code <= 6) {
+	if (vt52_mode && code > 0 && code <= 6) {
 	    p += sprintf((char *) p, "\x1B%c", " HLMEIG"[code]);
 	    return p - output;
 	}
@@ -611,13 +654,13 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    }
 	    return p - output;
 	}
-	if ((term->vt52_mode || funky_type == FUNKY_VT100P) && code >= 11 && code <= 24) {
+	if ((vt52_mode || funky_type == FUNKY_VT100P) && code >= 11 && code <= 24) {
 	    int offt = 0;
 	    if (code > 15)
 		offt++;
 	    if (code > 21)
 		offt++;
-	    if (term->vt52_mode)
+	    if (vt52_mode)
 		p += sprintf((char *) p, "\x1B%c", code + 'P' - 11 - offt);
 	    else
 		p +=
@@ -629,7 +672,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    return p - output;
 	}
 	if (funky_type == FUNKY_XTERM && code >= 11 && code <= 14) {
-	    if (term->vt52_mode)
+	    if (vt52_mode)
 		p += sprintf((char *) p, "\x1B%c", code + 'P' - 11);
 	    else
 		p += sprintf((char *) p, "\x1BO%c", code + 'P' - 11);
@@ -669,7 +712,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 		break;
 	    }
 	    if (xkey) {
-		p += format_arrow_key(p, term, xkey, shift_state);
+		p += format_arrow_key2(p, vt52_mode, app_cursor_keys, no_applic_c, xkey, shift_state);
 		return p - output;
 	    }
 	}
@@ -690,6 +733,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 	    alt_sum = 0;
     }
 
+#if 0
     /* Okay we've done everything interesting; let windows deal with 
      * the boring stuff */
     {
@@ -824,7 +868,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 			    luni_send(ldisc, cbuf +!left_alt, 1+!!left_alt, 1);
 		    }
 		}
-		show_mouseptr(0);
+		//show_mouseptr(0);
 	    }
 
 	    /* This is so the ALT-Numpad and dead keys work correctly. */
@@ -849,6 +893,7 @@ int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
      */
     if (wParam == VK_MENU && !conf_get_int(conf, CONF_alt_only))
 	return twk_SKIP;
+#endif
 
     return twk_FORWARD;
 }
