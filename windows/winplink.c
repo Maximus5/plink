@@ -291,66 +291,35 @@ int stdin_real_gotdata(struct handle *h, void *records, int len)
     if (connopen && back->connected(backhandle)) {
 	if (len > 0) {
 		int isentall = 0, isent, i;
-		unsigned char buf[20];
-		int translated;
+		unsigned char to_send[100];
+		int to_send_len = 0;
 		INPUT_RECORD* r;
-		BYTE keystate[256];
-		DWORD dw;
-		UINT message;
-		WPARAM wParam = 0;
-		LPARAM lParam = 0;
 	    //return back->send(backhandle, data, len);
 
 		r = (INPUT_RECORD*)records;
-		memset(keystate, 0, sizeof(keystate));
 		for (i = 0; i < len; i++, r++)
 		{
 			switch (r->EventType)
 			{
 			case KEY_EVENT:
-				dw = r->Event.KeyEvent.dwControlKeyState;
-				keystate[VK_CAPITAL] = (dw & CAPSLOCK_ON) ? 1 : 0;
-				keystate[VK_NUMLOCK] = (dw & NUMLOCK_ON) ? 1 : 0;
-				keystate[VK_SCROLL] = (dw & SCROLLLOCK_ON) ? 1 : 0;
-				keystate[VK_MENU] = (dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? 1 : 0;
-				keystate[VK_LMENU] = (dw & LEFT_ALT_PRESSED) ? 1 : 0;
-				keystate[VK_RMENU] = (dw & RIGHT_ALT_PRESSED) ? 1 : 0;
-				keystate[VK_CONTROL] = (dw & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) ? 1 : 0;
-				keystate[VK_LCONTROL] = (dw & LEFT_CTRL_PRESSED) ? 1 : 0;
-				keystate[VK_RCONTROL] = (dw & RIGHT_CTRL_PRESSED) ? 1 : 0;
-				keystate[VK_SHIFT] = (dw & (SHIFT_PRESSED)) ? 1 : 0;
-				keystate[VK_LSHIFT] = (dw & SHIFT_PRESSED) ? 1 : 0;
-				keystate[VK_RSHIFT] = 0;
-
-				message = (r->Event.KeyEvent.bKeyDown)
-					? ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYDOWN : WM_KEYDOWN)
-					: ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYUP : WM_KEYUP);
-				wParam = r->Event.KeyEvent.wVirtualKeyCode;
-				lParam = ((r->Event.KeyEvent.bKeyDown) ? 0 : (KF_UP << 16))
-					| ((dw & ENHANCED_KEY) ? (KF_EXTENDED << 16) : 0)
-					;
-
-				translated = TranslateWinKey(message, wParam, lParam,
-					conf, keystate, 0, NULL/*ldisc*/, buf);
-				switch (translated)
+				//TODO: Unicode (CP1200)?
+				to_send_len = TranslateConsoleEvent(r, conf, 0, NULL/*ldisc*/, to_send);
+				switch (to_send_len)
 				{
 				case twk_ASCIIZ:
-					translated = strlen(buf);
+					to_send_len = strlen(to_send);
 					break;
 				case twk_FORWARD:
-					//TODO: Unicode?
-					if (!r->Event.KeyEvent.uChar.AsciiChar || !r->Event.KeyEvent.bKeyDown)
-						continue;
-					buf[0] = r->Event.KeyEvent.uChar.AsciiChar;
-					translated = 1;
+					assert(!"twk_FORWARD must be processed in TranslateConsoleEvent");
+					to_send_len = 0;
 					break;
 				default:
-					if (translated <= 0)
+					if (to_send_len <= 0)
 						continue;
 				}
-				if (translated > 0)
+				if (to_send_len > 0)
 				{
-					isent = back->send(backhandle, buf, translated);
+					isent = back->send(backhandle, to_send, to_send_len);
 					isentall += isent;
 				}
 				break;

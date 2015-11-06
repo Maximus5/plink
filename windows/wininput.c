@@ -42,6 +42,75 @@ int format_arrow_key2(char *buf, int vt52_mode, int app_cursor_keys, int no_appl
 }
 
 /*
+ * Translate a INPUT_RECORD console event into a string of ASCII
+ * codes. Returns number of bytes used, zero to drop the message,
+ * -1 to forward the message to Windows, or another negative number
+ * to indicate a NUL-terminated "special" string.
+ */
+int TranslateConsoleEvent(INPUT_RECORD* r,
+			Conf *conf, int compose_state, void *ldisc,
+			unsigned char *output)
+{
+	BYTE   keystate[256];
+	DWORD  dw;
+	UINT   message;
+	WPARAM wParam;
+	LPARAM lParam;
+	int    translated = 0;
+
+	switch (r->EventType)
+	{
+	case KEY_EVENT:
+		/* Process only 'key down' events */
+		if (r->Event.KeyEvent.uChar.AsciiChar && !r->Event.KeyEvent.bKeyDown)
+			break;
+
+		memset(keystate, 0, sizeof(keystate));
+
+		dw = r->Event.KeyEvent.dwControlKeyState;
+		keystate[VK_CAPITAL] = (dw & CAPSLOCK_ON) ? 1 : 0;
+		keystate[VK_NUMLOCK] = (dw & NUMLOCK_ON) ? 1 : 0;
+		keystate[VK_SCROLL] = (dw & SCROLLLOCK_ON) ? 1 : 0;
+		keystate[VK_MENU] = (dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? 1 : 0;
+		keystate[VK_LMENU] = (dw & LEFT_ALT_PRESSED) ? 1 : 0;
+		keystate[VK_RMENU] = (dw & RIGHT_ALT_PRESSED) ? 1 : 0;
+		keystate[VK_CONTROL] = (dw & (LEFT_CTRL_PRESSED|RIGHT_CTRL_PRESSED)) ? 1 : 0;
+		keystate[VK_LCONTROL] = (dw & LEFT_CTRL_PRESSED) ? 1 : 0;
+		keystate[VK_RCONTROL] = (dw & RIGHT_CTRL_PRESSED) ? 1 : 0;
+		keystate[VK_SHIFT] = (dw & (SHIFT_PRESSED)) ? 1 : 0;
+		keystate[VK_LSHIFT] = (dw & SHIFT_PRESSED) ? 1 : 0;
+		keystate[VK_RSHIFT] = 0;
+
+		message = (r->Event.KeyEvent.bKeyDown)
+			? ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYDOWN : WM_KEYDOWN)
+			: ((dw & (LEFT_ALT_PRESSED|RIGHT_ALT_PRESSED)) ? WM_SYSKEYUP : WM_KEYUP);
+		wParam = r->Event.KeyEvent.wVirtualKeyCode;
+		lParam = ((r->Event.KeyEvent.bKeyDown) ? 0 : (KF_UP << 16))
+			| ((dw & ENHANCED_KEY) ? (KF_EXTENDED << 16) : 0)
+			;
+
+		translated = TranslateWinKey(message, wParam, lParam,
+			conf, keystate, compose_state, ldisc, output);
+		if (translated == twk_FORWARD)
+		{
+			//TODO: Unicode (CP1200)?
+			if (r->Event.KeyEvent.uChar.AsciiChar)
+			{
+				output[0] = r->Event.KeyEvent.uChar.AsciiChar;
+				translated = 1;
+			}
+			else
+			{
+				translated = 0;
+			}
+		}
+		break;
+	}
+
+	return translated;
+}
+
+/*
  * Translate a WM_(SYS)?KEY(UP|DOWN) message into a string of ASCII
  * codes. Returns number of bytes used, zero to drop the message,
  * -1 to forward the message to Windows, or another negative number

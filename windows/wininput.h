@@ -22,4 +22,8 @@ extern int TranslateWinKey(UINT message, WPARAM wParam, LPARAM lParam,
 			Conf *conf, BYTE* keystate/*[256]*/, int compose_state, void *ldisc,
 			unsigned char *output);
 
+extern int TranslateConsoleEvent(INPUT_RECORD* r,
+			Conf *conf, int compose_state, void *ldisc,
+			unsigned char *output);
+
 #endif
