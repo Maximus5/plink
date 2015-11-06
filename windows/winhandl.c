@@ -210,17 +210,38 @@ static DWORD WINAPI handle_input_real_threadfunc(void *param)
     struct handle_input *ctx = (struct handle_input *) param;
     int readret, readlen, finished;
 
-    //if (ctx->flags & HANDLE_FLAG_UNITBUFFER)
+    if (ctx->flags & HANDLE_FLAG_UNITBUFFER)
 	readlen = 1;
-    //else
-	//readlen = sizeof(ctx->records)/sizeof(ctx->records[0]);
+    else
+	readlen = sizeof(ctx->records)/sizeof(ctx->records[0]);
 
     while (1) {
-	readret = ReadConsoleInput(ctx->h, ctx->records,readlen, &ctx->len);
+	readret = ReadConsoleInput(ctx->h, ctx->records, 1, &ctx->len);
 	if (!readret)
 	    ctx->readerr = GetLastError();
 	else
-	    ctx->readerr = 0;
+	{
+		ctx->readerr = 0;
+		// "Enter" keypress send immediately
+		if ((ctx->records[0].EventType == KEY_EVENT)
+			&& (ctx->records[0].Event.KeyEvent.uChar.AsciiChar != 0)
+			&& (ctx->records[0].Event.KeyEvent.wVirtualKeyCode != VK_RETURN))
+		{
+			DWORD nPeek = 0;
+			INPUT_RECORD* prec = ctx->records+1;
+			while (--readlen
+				&& PeekConsoleInput(ctx->h, prec, 1, &nPeek)
+				&& nPeek
+				&& (prec->EventType == KEY_EVENT)
+				&& (prec->Event.KeyEvent.uChar.AsciiChar))
+			{
+				if (!ReadConsoleInput(ctx->h, prec, 1, &nPeek))
+					break;
+				ctx->len++;
+				prec++;
+			}
+		}
+	}
 
 	if (!readret) {
 	    /*
