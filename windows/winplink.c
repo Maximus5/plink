@@ -293,6 +293,8 @@ int stdin_real_gotdata(struct handle *h, void *records, int len)
 		int isentall = 0, isent, i;
 		unsigned char to_send[100];
 		int to_send_len = 0;
+		unsigned char add_buf[20];
+		int add_send;
 		INPUT_RECORD* r;
 	    //return back->send(backhandle, data, len);
 
@@ -319,6 +321,18 @@ int stdin_real_gotdata(struct handle *h, void *records, int len)
 				}
 				if (to_send_len > 0)
 				{
+					while (((i+1) < len) && (r[1].EventType == KEY_EVENT) && (to_send_len < 80))
+					{
+						i++; r++;
+						add_send = TranslateConsoleEvent(r, conf, 0, NULL/*ldisc*/, add_buf);
+						if (add_send == twk_ASCIIZ)
+							add_send = strlen(add_buf);
+						if (add_send > 0)
+						{
+							memmove(to_send+to_send_len, add_buf, add_send);
+							to_send_len += add_send;
+						}
+					}
 					isent = back->send(backhandle, to_send, to_send_len);
 					isentall += isent;
 				}
