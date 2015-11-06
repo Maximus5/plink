@@ -17,6 +17,8 @@
 #include "sshgss.h"
 #endif
 
+#include "windows/dbg_send.h"
+
 #ifndef FALSE
 #define FALSE 0
 #endif
@@ -11208,6 +11210,8 @@ static int ssh_send(void *handle, const char *buf, int len)
 
     if (ssh == NULL || ssh->s == NULL || ssh->protocol == NULL)
 	return 0;
+
+    DumpSendString((const char *)buf, len);
 
     ssh->protocol(ssh, (const unsigned char *)buf, len, 0);
 
