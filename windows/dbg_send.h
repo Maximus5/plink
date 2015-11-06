@@ -50,6 +50,9 @@ static void DumpSendString(const char* buf, size_t cchLen)
 			case '\\':
 				*(pszDst++) = '\\'; *(pszDst++) = '\\';
 				break;
+			case 0x7F:
+				*(pszDst++) = '\\'; *(pszDst++) = 'x'; *(pszDst++) = '7'; *(pszDst++) = 'F';
+				break;
 			default:
 				*(pszDst++) = *pszSrc;
 			}
