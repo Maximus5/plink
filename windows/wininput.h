@@ -26,4 +26,6 @@ extern int TranslateConsoleEvent(INPUT_RECORD* r,
 			Conf *conf, int compose_state, void *ldisc,
 			unsigned char *output);
 
+extern BOOL WINAPI win_ctrlc_handler(DWORD dwCtrlType);
+
 #endif

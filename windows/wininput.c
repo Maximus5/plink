@@ -5,6 +5,34 @@
 #include "terminal.h"
 #include "wininput.h"
 
+/*
+ * Avoid plink crash (kill) on CtrlC keypress
+ */
+BOOL WINAPI win_ctrlc_handler(DWORD dwCtrlType)
+{
+	INPUT_RECORD r;
+	DWORD written;
+	switch (dwCtrlType)
+	{
+	case CTRL_C_EVENT:
+		memset(&r, 0, sizeof(r));
+		r.EventType = KEY_EVENT;
+		r.Event.KeyEvent.bKeyDown = TRUE;
+		r.Event.KeyEvent.dwControlKeyState = LEFT_CTRL_PRESSED;
+		r.Event.KeyEvent.uChar.AsciiChar = 3; // CtrlC
+		r.Event.KeyEvent.wVirtualKeyCode = 'C';
+		WriteConsoleInput(GetStdHandle(STD_INPUT_HANDLE), &r, 1, &written);
+		/* we've handled the signal */
+		return TRUE;
+	case CTRL_BREAK_EVENT:
+		/* we've handled (ignored) the signal */
+		return TRUE;
+	default:
+		/* bypass event to the next handler */
+		return FALSE;
+	}
+}
+
 int format_arrow_key2(char *buf, int vt52_mode, int app_cursor_keys, int no_applic_c, int xkey, int ctrl)
 {
     char *p = buf;

@@ -761,6 +761,11 @@ int main(int argc, char **argv)
     stdout_handle = handle_output_new(outhandle, stdouterr_sent, NULL, 0);
     stderr_handle = handle_output_new(errhandle, stdouterr_sent, NULL, 0);
 
+    /*
+     * Avoid plink crash (kill) on CtrlC keypress
+     */
+    SetConsoleCtrlHandler(win_ctrlc_handler, TRUE);
+
     main_thread_id = GetCurrentThreadId();
 
     sending = FALSE;
